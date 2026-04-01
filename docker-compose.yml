@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  mailbag:
+    build: .
+    ports:
+      - "9230:9230"
+    environment:
+      - PORT=9230
+      - DATA_DIR=/data
+      - MAILBAG_LICENSE_KEY=
+    volumes:
+      - mailbag_data:/data
+    restart: unless-stopped
+volumes:
+  mailbag_data:
