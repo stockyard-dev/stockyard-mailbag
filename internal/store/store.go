@@ -1,65 +1,16 @@
 package store
-
-import (
-	"database/sql"
-	"fmt"
-	"os"
-	"path/filepath"
-
-	_ "modernc.org/sqlite"
-)
-
-type DB struct {
-	*sql.DB
-}
-
-func Open(dataDir string) (*DB, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return nil, fmt.Errorf("mkdir: %w", err)
-	}
-	dsn := filepath.Join(dataDir, "mailbag.db") + "?_journal_mode=WAL&_busy_timeout=5000"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-	if err := migrate(db); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	return &DB{db}, nil
-}
-
-func migrate(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS smtp_configs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        host TEXT NOT NULL,
-        port INTEGER NOT NULL DEFAULT 587,
-        username TEXT NOT NULL,
-        password_encrypted TEXT NOT NULL,
-        from_email TEXT NOT NULL,
-        from_name TEXT,
-        is_default INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-     );
-     CREATE TABLE IF NOT EXISTS templates (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        html_body TEXT NOT NULL,
-        text_body TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-     );
-     CREATE TABLE IF NOT EXISTS sends (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        template_id INTEGER,
-        to_email TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        status TEXT DEFAULT 'queued',
-        sent_at DATETIME,
-        opened_at DATETIME,
-        error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-     );`)
-	return err
-}
+import("database/sql";"fmt";"os";"path/filepath";"time";_ "modernc.org/sqlite")
+type DB struct{*sql.DB}
+type Template struct{ID int64 `json:"id"`;Name string `json:"name"`;Subject string `json:"subject"`;Body string `json:"body"`;Tags string `json:"tags"`;CreatedAt time.Time `json:"created_at"`}
+type Message struct{ID int64 `json:"id"`;TemplateID *int64 `json:"template_id"`;TemplateName string `json:"template_name,omitempty"`;ToAddr string `json:"to"`;Subject string `json:"subject"`;Body string `json:"body"`;Status string `json:"status"`;Error string `json:"error"`;CreatedAt time.Time `json:"created_at"`;SentAt *time.Time `json:"sent_at"`}
+func Open(dataDir string)(*DB,error){if err:=os.MkdirAll(dataDir,0755);err!=nil{return nil,fmt.Errorf("mkdir: %w",err)};dsn:=filepath.Join(dataDir,"mailbag.db")+"?_journal_mode=WAL&_busy_timeout=5000";db,err:=sql.Open("sqlite",dsn);if err!=nil{return nil,fmt.Errorf("open: %w",err)};db.SetMaxOpenConns(1);if err:=migrate(db);err!=nil{return nil,fmt.Errorf("migrate: %w",err)};return &DB{db},nil}
+func migrate(db *sql.DB)error{_,err:=db.Exec(`CREATE TABLE IF NOT EXISTS templates(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,subject TEXT NOT NULL,body TEXT NOT NULL,tags TEXT DEFAULT '',created_at DATETIME DEFAULT CURRENT_TIMESTAMP);CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT,template_id INTEGER,to_addr TEXT NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,status TEXT DEFAULT 'queued',error TEXT DEFAULT '',created_at DATETIME DEFAULT CURRENT_TIMESTAMP,sent_at DATETIME);CREATE INDEX IF NOT EXISTS msg_status ON messages(status);`);return err}
+func(db *DB)ListTemplates()([]Template,error){rows,err:=db.Query(`SELECT id,name,subject,body,tags,created_at FROM templates ORDER BY name`);if err!=nil{return nil,err};defer rows.Close();var out[]Template;for rows.Next(){var t Template;rows.Scan(&t.ID,&t.Name,&t.Subject,&t.Body,&t.Tags,&t.CreatedAt);out=append(out,t)};return out,nil}
+func(db *DB)GetTemplate(id int64)(*Template,error){t:=&Template{};err:=db.QueryRow(`SELECT id,name,subject,body,tags,created_at FROM templates WHERE id=?`,id).Scan(&t.ID,&t.Name,&t.Subject,&t.Body,&t.Tags,&t.CreatedAt);if err!=nil{return nil,err};return t,nil}
+func(db *DB)CreateTemplate(t *Template)error{res,err:=db.Exec(`INSERT INTO templates(name,subject,body,tags)VALUES(?,?,?,?)`,t.Name,t.Subject,t.Body,t.Tags);if err!=nil{return err};t.ID,_=res.LastInsertId();return nil}
+func(db *DB)DeleteTemplate(id int64)error{_,err:=db.Exec(`DELETE FROM templates WHERE id=?`,id);return err}
+func(db *DB)ListMessages(status string,limit int)([]Message,error){if limit==0{limit=100};q:=`SELECT m.id,m.template_id,COALESCE(t.name,''),m.to_addr,m.subject,m.body,m.status,m.error,m.created_at,m.sent_at FROM messages m LEFT JOIN templates t ON t.id=m.template_id`;var rows *sql.Rows;var err error;if status!=""{rows,err=db.Query(q+fmt.Sprintf(` WHERE m.status=? ORDER BY m.created_at DESC LIMIT %d`,limit),status)}else{rows,err=db.Query(q+fmt.Sprintf(` ORDER BY m.created_at DESC LIMIT %d`,limit))};if err!=nil{return nil,err};defer rows.Close();var out[]Message;for rows.Next(){var m Message;rows.Scan(&m.ID,&m.TemplateID,&m.TemplateName,&m.ToAddr,&m.Subject,&m.Body,&m.Status,&m.Error,&m.CreatedAt,&m.SentAt);out=append(out,m)};return out,nil}
+func(db *DB)SendMessage(m *Message)error{res,err:=db.Exec(`INSERT INTO messages(template_id,to_addr,subject,body,status)VALUES(?,?,?,?,'queued')`,m.TemplateID,m.ToAddr,m.Subject,m.Body);if err!=nil{return err};m.ID,_=res.LastInsertId();m.Status="queued";return nil}
+func(db *DB)UpdateMessageStatus(id int64,status,errMsg string)error{if errMsg!=""{_,err:=db.Exec(`UPDATE messages SET status=?,error=?,sent_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id=?`,status,errMsg,status,id);return err};_,err:=db.Exec(`UPDATE messages SET status=?,sent_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id=?`,status,status,id);return err}
+func(db *DB)DeleteMessage(id int64)error{_,err:=db.Exec(`DELETE FROM messages WHERE id=?`,id);return err}
+func(db *DB)MessageStats()(map[string]int,error){rows,err:=db.Query(`SELECT status,COUNT(*) FROM messages GROUP BY status`);if err!=nil{return nil,err};defer rows.Close();m:=map[string]int{"queued":0,"sent":0,"failed":0};for rows.Next(){var s string;var n int;rows.Scan(&s,&n);m[s]=n};return m,nil}
