@@ -36,6 +36,7 @@ patch.Body=existing.Body};if patch.Status==""{
 patch.Status=existing.Status};if patch.ThreadID==""{
 patch.ThreadID=existing.ThreadID};if patch.ReceivedAt==""{
 patch.ReceivedAt=existing.ReceivedAt}
+    if patch.HasAttachment==0{patch.HasAttachment=existing.HasAttachment}
     s.db.Update(&patch);wj(w,200,s.db.Get(patch.ID))
 }
 func(s *Server)del(w http.ResponseWriter,r *http.Request){s.db.Delete(r.PathValue("id"));wj(w,200,map[string]string{"deleted":"ok"})}
